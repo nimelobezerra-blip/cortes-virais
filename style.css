@@ -225,3 +225,10 @@ input[type=color] { width: 54px; height: 36px; border: 1px solid var(--line2); b
   .top-actions { gap: 6px; }
   .top-actions .btn { padding: 8px 10px; }
 }
+.lib-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 26px 0 12px; }
+.lib-bar .lib-title { margin: 0; }
+.lib-bar .seg { margin: 0; }
+.lib-bar .seg button { flex: 0 0 auto; padding: 6px 12px; }
+.reel.ref { border-color: rgba(255, 154, 60, .35); }
+.reel.ref .rthumb .src { background: var(--acc2); color: #000; font-weight: 700; }
+.rprofile { margin-bottom: 8px; padding: 6px 8px !important; font-size: 13px; }

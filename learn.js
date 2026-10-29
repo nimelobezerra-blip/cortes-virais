@@ -1,7 +1,7 @@
 'use strict';
-// Aprendizado: o site analisa os Reels já publicados (e os cortes exportados) junto com as
-// métricas de cada um, descobre que características dão resultado no perfil e passa essa
-// previsão para a escolha automática dos cortes (app.js → pickClips).
+// Aprendizado: o site analisa os Reels já publicados, os cortes exportados e cortes virais de
+// outros perfis (referências) junto com as métricas de cada um, descobre que características dão
+// resultado e passa essa previsão para a escolha automática dos cortes (app.js → pickClips).
 (() => {
   const C = window.Cortes;
   const $ = (s) => document.querySelector(s);
@@ -9,6 +9,10 @@
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const KEY = 'cortes-learn', MIN = 5;
   const METRICS = [['views', '👁 Visualiz.'], ['likes', '❤️ Curtidas'], ['comments', '💬 Coment.'], ['shares', '↗️ Compart.'], ['saves', '🔖 Salvam.']];
+  const METRICS_REF = [['views', '👁 Visualiz.'], ['followers', '👥 Seguidores'], ['likes', '❤️ Curtidas'], ['comments', '💬 Coment.']];
+  const isRef = (it) => it.source === 'ref';
+  // referências pesam menos quando já há vídeos seus suficientes
+  const refWeight = (own) => (own >= MIN ? 0.6 : 1);
   // como explicar cada característica quando ela ajuda (peso positivo / negativo)
   const LABELS = {
     dur: ['Vídeos mais longos', 'Vídeos mais curtos'],
@@ -48,12 +52,14 @@
   const fmtShort = (n) => n >= 1e6 ? (n / 1e6).toFixed(1).replace('.', ',') + ' mi' : n >= 1e3 ? Math.round(n / 1e3) + ' mil' : String(n);
 
   // ---------- modelo: regressão ridge sobre as características padronizadas ----------
+  const complete = (it) => it.metrics.views > 0 && (!isRef(it) || it.metrics.followers > 0);
+  // resultado de cada vídeo; nas referências, as visualizações são comparadas com o tamanho do perfil
   function targetOf(it) {
     const m = it.metrics || {}, v = m.views;
-    if (!(v > 0)) return null;
-    if (lib.target === 'views') return Math.log10(1 + v);
+    if (!complete(it)) return null;
+    if (lib.target === 'views') return isRef(it) ? Math.log10((v + 1) / (m.followers + 1)) : Math.log10(1 + v);
     if (m.likes == null) return null;
-    const eng = m.likes + 2 * (m.comments || 0) + 3 * (m.shares || 0) + 3 * (m.saves || 0);
+    const eng = m.likes + 2 * (m.comments || 0) + (isRef(it) ? 0 : 3 * (m.shares || 0) + 3 * (m.saves || 0));
     return Math.log10((eng + 1) / v);
   }
 
@@ -70,9 +76,9 @@
     }
     return M.map((r) => r[n]);
   }
-  function fit(X, y, lambda) {
+  function fit(X, y, lambda, wt) {
     const p = X[0].length, A = Array.from({ length: p }, () => new Array(p).fill(0)), b = new Array(p).fill(0);
-    X.forEach((x, i) => { for (let j = 0; j < p; j++) { b[j] += x[j] * y[i]; for (let k = 0; k < p; k++) A[j][k] += x[j] * x[k]; } });
+    X.forEach((x, i) => { for (let j = 0; j < p; j++) { b[j] += wt[i] * x[j] * y[i]; for (let k = 0; k < p; k++) A[j][k] += wt[i] * x[j] * x[k]; } });
     for (let j = 0; j < p; j++) A[j][j] += lambda;
     return solve(A, b);
   }
@@ -87,21 +93,30 @@
   function train() {
     const F = C.FEATS;
     const rows = lib.items.map((it) => ({ it, y: targetOf(it) })).filter((r) => r.y != null && r.it.feats);
-    const n = rows.length;
-    if (n < MIN) return { ready: false, n };
+    const n = rows.length, own = rows.filter((r) => !isRef(r.it)).length, refs = n - own;
+    if (n < MIN) return { ready: false, n, own, refs };
+    // seus vídeos e as referências medem coisas diferentes: cada grupo é padronizado à parte
+    for (const grp of [rows.filter((r) => !isRef(r.it)), rows.filter((r) => isRef(r.it))]) {
+      const m = grp.reduce((a, r) => a + r.y, 0) / (grp.length || 1);
+      const d = Math.sqrt(grp.reduce((a, r) => a + (r.y - m) ** 2, 0) / (grp.length || 1)) || 1;
+      grp.forEach((r) => { r.raw = r.y; r.y = (r.y - m) / d; });
+    }
+    const wt = rows.map((r) => (isRef(r.it) ? refWeight(own) : 1));
     const mu = F.map((k) => rows.reduce((s, r) => s + (r.it.feats[k] || 0), 0) / n);
     const sd = F.map((k, j) => Math.sqrt(rows.reduce((s, r) => s + ((r.it.feats[k] || 0) - mu[j]) ** 2, 0) / n) || 1);
     const X = rows.map((r) => F.map((k, j) => ((r.it.feats[k] || 0) - mu[j]) / sd[j]));
-    const ym = rows.reduce((s, r) => s + r.y, 0) / n, y = rows.map((r) => r.y - ym);
+    const y = rows.map((r) => r.y), ym = 0;
     const lambda = 2 + 40 / n; // poucos vídeos → modelo mais cauteloso
-    const w = fit(X, y, lambda);
+    const w = fit(X, y, lambda, wt);
     // confiança: cada vídeo é previsto por um modelo treinado sem ele
-    const loo = X.map((x, i) => dot(fit(X.filter((_, k) => k !== i), y.filter((_, k) => k !== i), lambda), x));
+    const skip = (arr, i) => arr.filter((_, k) => k !== i);
+    const loo = X.map((x, i) => dot(fit(skip(X, i), skip(y, i), lambda, skip(wt, i)), x));
     const conf = Math.max(0, corr(loo, y));
     const ranked = rows.slice().sort((a, b) => b.y - a.y), top = ranked.slice(0, Math.ceil(n / 3));
     const durs = top.map((r) => r.it.feats.dur).sort((a, b) => a - b);
+    const bestOf = (ref) => { const r = rows.filter((x) => isRef(x.it) === ref).sort((a, b) => b.raw - a.raw)[0]; return r ? r.it : null; };
     return {
-      ready: true, n, conf, w, best: ranked[0].it,
+      ready: true, n, own, refs, conf, w, bestOwn: bestOf(false), bestRef: bestOf(true),
       idealDur: durs[Math.floor(durs.length / 2)],
       factors: F.map((k, j) => ({ k, w: w[j] })).filter((f) => Math.abs(f.w) > 0.03).sort((a, b) => Math.abs(b.w) - Math.abs(a.w)),
       predict: (f) => ym + F.reduce((s, k, j) => s + w[j] * ((f[k] || 0) - mu[j]) / sd[j], 0),
@@ -116,7 +131,7 @@
       return { predict: model.predict, weight: clamp(model.conf, 0, 0.7) };
     },
     status() {
-      return { n: model ? model.n : 0, min: MIN, conf: model && model.ready ? Math.round(model.conf * 100) : 0 };
+      return { n: model ? model.n : 0, own: model ? model.own : 0, refs: model ? model.refs : 0, min: MIN, conf: model && model.ready ? Math.round(model.conf * 100) : 0 };
     },
     addExport({ name, title, thumb, feats }) {
       lib.items.unshift({ id: newId(), name, title, source: 'export', thumb: thumb || null, feats: round(feats), metrics: {}, added: today() });
@@ -131,23 +146,24 @@
   // ---------- análise dos Reels enviados ----------
   const queue = [];
   let working = false, progress = 0;
-  function addFiles(files) {
+  function addFiles(files, source) {
     for (const f of files) {
       const key = f.name + ':' + f.size;
-      if (lib.items.some((it) => it.key === key) || queue.some((q) => q.name + ':' + q.size === key)) continue;
-      queue.push(f);
+      if (lib.items.some((it) => it.key === key) || queue.some((q) => q.file.name + ':' + q.file.size === key)) continue;
+      queue.push({ file: f, source });
     }
+    if (source === 'ref') C.toast('Depois da análise, preencha as visualizações e os seguidores do perfil de cada referência.', 6000);
     renderQueue();
     if (!working) run();
   }
   async function run() {
     working = true;
     while (queue.length) {
-      const f = queue[0];
+      const { file: f, source } = queue[0];
       progress = 0;
       renderQueue();
       try {
-        const it = await analyzeReel(f, (p) => { progress = p; renderQueue(); });
+        const it = await analyzeReel(f, (p) => { progress = p; renderQueue(); }, source);
         lib.items.unshift(it);
         save(); retrain();
       } catch (e) {
@@ -159,7 +175,7 @@
     working = false;
     renderQueue();
   }
-  async function analyzeReel(file, onp) {
+  async function analyzeReel(file, onp, source) {
     const url = URL.createObjectURL(file);
     try {
       const v = document.createElement('video');
@@ -181,7 +197,7 @@
       onp(0.3);
       const vis = await C.visualScan(url, duration, (p) => onp(0.3 + 0.7 * p), () => false);
       const feats = C.features(C.buildSeries(duration, aud, vis), 0, duration);
-      return { id: newId(), key: file.name + ':' + file.size, name: file.name.replace(/\.[^.]+$/, ''), source: 'reel', thumb, feats: round(feats), metrics: {}, added: today() };
+      return { id: newId(), key: file.name + ':' + file.size, name: file.name.replace(/\.[^.]+$/, ''), source, profile: '', thumb, feats: round(feats), metrics: {}, added: today() };
     } finally {
       URL.revokeObjectURL(url);
     }
@@ -190,39 +206,41 @@
   // ---------- tela ----------
   function renderQueue() {
     $('#lQueue').textContent = queue.length
-      ? `Analisando “${queue[0].name}” (${Math.round(progress * 100)}%)${queue.length > 1 ? ` · mais ${queue.length - 1} na fila` : ''}…`
+      ? `Analisando “${queue[0].file.name}” (${Math.round(progress * 100)}%)${queue.length > 1 ? ` · mais ${queue.length - 1} na fila` : ''}…`
       : '';
   }
 
   function renderSummary() {
     const m = model || { ready: false, n: 0 };
-    const pend = lib.items.filter((it) => !(it.metrics && it.metrics.views > 0)).length;
+    const pend = lib.items.filter((it) => !complete(it)).length;
+    const mix = m.n ? ` <span class="muted" style="display:inline;font-size:14px;font-weight:400">(${m.own} seus · ${m.refs} referências)</span>` : '';
     let st;
     if (!m.ready) {
-      st = `<b>Aprendendo: ${m.n} de ${MIN} vídeos</b><span class="muted">Adicione Reels e preencha as visualizações. Com ${MIN} já começa; com 15 ou mais o padrão fica bem mais confiável.</span>
+      st = `<b>Aprendendo: ${m.n} de ${MIN} vídeos${mix}</b><span class="muted">Adicione seus Reels ou cortes virais de outros perfis e preencha os números. Com ${MIN} já começa; com 15 ou mais o padrão fica bem mais confiável.</span>
         <div class="dots">${Array.from({ length: MIN }, (_, i) => `<i class="${i < m.n ? 'on' : ''}"></i>`).join('')}</div>`;
     } else if (m.conf < 0.1) {
-      st = `<b>${m.n} vídeos · ainda sem padrão</b><span class="muted">Os resultados ainda não seguem um padrão claro. Os cortes usam só a análise geral até haver mais vídeos.</span>`;
+      st = `<b>${m.n} vídeos · ainda sem padrão${mix}</b><span class="muted">Os resultados ainda não seguem um padrão claro. Os cortes usam só a análise geral até haver mais vídeos.</span>`;
     } else {
-      st = `<b>Ativo · ${m.n} vídeos</b><span class="muted">A escolha automática dos cortes já usa o que funciona no seu perfil.</span>`;
+      st = `<b>Ativo · ${m.n} vídeos${mix}</b><span class="muted">A escolha automática dos cortes já usa o que aprendeu.${m.refs && m.own >= MIN ? ' Seus vídeos contam mais que as referências.' : ''}</span>`;
     }
-    if (pend) st += `<p class="hint tag-pend" style="margin:10px 0 0">${pend} ${pend > 1 ? 'vídeos aguardam' : 'vídeo aguarda'} as visualizações.</p>`;
+    if (pend) st += `<p class="hint tag-pend" style="margin:10px 0 0">${pend} ${pend > 1 ? 'vídeos aguardam' : 'vídeo aguarda'} os números.</p>`;
     $('#lStatus').innerHTML = st;
     $('#lTarget').value = lib.target;
 
     let ins;
     if (!m.ready) {
-      ins = '<p class="hint">Aqui vão aparecer as características que mais aumentam (ou derrubam) o resultado dos seus vídeos, a duração ideal e o seu melhor Reel.</p>';
+      ins = '<p class="hint">Aqui vão aparecer as características que mais aumentam o resultado dos vídeos, a duração ideal, o seu melhor Reel e a melhor referência.</p>';
     } else {
       const max = Math.max(...m.factors.map((f) => Math.abs(f.w)), 1e-6);
       ins = `<div class="conf"><span>Confiança</span><div class="bar"><i style="width:${Math.round(m.conf * 100)}%"></i></div><b>${Math.round(m.conf * 100)}%</b></div>`;
       ins += m.factors.length
         ? m.factors.slice(0, 6).map((f) => `<div class="factor"><span>✅ ${esc(LABELS[f.k][f.w > 0 ? 0 : 1])}</span><div class="fbar"><i style="width:${Math.round(Math.abs(f.w) / max * 100)}%"></i></div></div>`).join('')
         : '<p class="hint">Nenhuma característica se destaca ainda.</p>';
-      const bv = m.best.metrics.views;
+      const name = (it) => esc(it.title || it.name) + (it.profile ? ` (${esc(it.profile)})` : '');
       ins += `<div class="facts">
-        <span>⏱ Duração dos seus melhores: <b>~${Math.round(m.idealDur)} s</b><button id="lUseDur" class="btn ghost small">Usar nos cortes</button></span>
-        <span>🏆 Melhor: <b>${esc(m.best.name)}</b> · ${fmtShort(bv)} visualizações</span>
+        <span>⏱ Duração dos melhores: <b>~${Math.round(m.idealDur)} s</b><button id="lUseDur" class="btn ghost small">Usar nos cortes</button></span>
+        ${m.bestOwn ? `<span>🏆 Seu melhor: <b>${name(m.bestOwn)}</b> · ${fmtShort(m.bestOwn.metrics.views)} visualizações</span>` : ''}
+        ${m.bestRef ? `<span>🌟 Melhor referência: <b>${name(m.bestRef)}</b> · ${(m.bestRef.metrics.views / m.bestRef.metrics.followers).toFixed(1).replace('.', ',')}× os seguidores</span>` : ''}
       </div>`;
       ins += '<p class="hint" style="margin:12px 0 0">A confiança mede o quanto o modelo acerta vídeos que não viu no treino. Correlação não é garantia: use como guia.</p>';
     }
@@ -237,22 +255,36 @@
 
   }
 
-  const footOf = (it) => it.metrics.views > 0 ? 'Adicionado em ' + it.added.split('-').reverse().join('/') : '<span class="tag-pend">Falta preencher as visualizações</span>';
+  const footOf = (it) => complete(it) ? 'Adicionado em ' + it.added.split('-').reverse().join('/')
+    : `<span class="tag-pend">Falta preencher ${isRef(it) && it.metrics.views > 0 ? 'os seguidores' : isRef(it) && !it.metrics.followers ? 'visualizações e seguidores' : 'as visualizações'}</span>`;
+  const needs = (it, k) => (k === 'views' && !(it.metrics.views > 0)) || (k === 'followers' && !(it.metrics.followers > 0));
+  let filter = 'all';
   function renderList() {
+    const items = lib.items.filter((it) => filter === 'all' || (filter === 'ref') === isRef(it));
     $('#lCount').textContent = lib.items.length ? `(${lib.items.length})` : '';
-    $('#lList').innerHTML = lib.items.length ? lib.items.map((it) => `
-      <article class="reel" data-id="${it.id}">
-        <div class="rthumb">${it.thumb ? `<img src="${it.thumb}" alt="">` : ''}<span class="src">${it.source === 'export' ? 'Corte' : 'Reel'}</span><span class="dur">${Math.round(it.feats.dur)}s</span></div>
+    $('#lList').innerHTML = items.length ? items.map((it) => `
+      <article class="reel${isRef(it) ? ' ref' : ''}" data-id="${it.id}">
+        <div class="rthumb">${it.thumb ? `<img src="${it.thumb}" alt="">` : ''}<span class="src">${isRef(it) ? 'Referência' : it.source === 'export' ? 'Corte' : 'Reel'}</span><span class="dur">${Math.round(it.feats.dur)}s</span></div>
         <div>
           <div class="rname" title="${esc(it.title || it.name)}">${esc(it.title ? it.title + ' — ' + it.name : it.name)}</div>
-          <div class="rgrid">${METRICS.map(([k, label]) => `<label class="${k === 'views' && !(it.metrics.views > 0) ? 'need' : ''}"><span>${label}</span><input inputmode="decimal" data-m="${k}" value="${fmtNum(it.metrics[k])}" placeholder="—"></label>`).join('')}</div>
+          ${isRef(it) ? `<input class="rprofile" data-p value="${esc(it.profile || '')}" placeholder="@perfil (opcional)" maxlength="40">` : ''}
+          <div class="rgrid">${(isRef(it) ? METRICS_REF : METRICS).map(([k, label]) => `<label class="${needs(it, k) ? 'need' : ''}"><span>${label}</span><input inputmode="decimal" data-m="${k}" value="${fmtNum(it.metrics[k])}" placeholder="—"></label>`).join('')}</div>
           <div class="rfoot"><span class="rstate">${footOf(it)}</span><button data-del title="Remover do aprendizado">Remover</button></div>
         </div>
       </article>`).join('')
-      : '<p class="empty">Nenhum vídeo ainda. Adicione os seus Reels publicados para o site começar a aprender.</p>';
+      : `<p class="empty">${filter === 'ref' ? 'Nenhuma referência ainda. Salve no celular cortes virais de outros perfis e adicione aqui.' : 'Nenhum vídeo ainda. Adicione os seus Reels ou referências para o site começar a aprender.'}</p>`;
   }
 
   $('#lList').addEventListener('change', (e) => {
+    const prof = e.target.closest('input[data-p]');
+    if (prof) {
+      const it = lib.items.find((x) => x.id === prof.closest('.reel').dataset.id);
+      const v = prof.value.trim().replace(/^@?/, '@');
+      it.profile = v === '@' ? '' : v.slice(0, 40);
+      prof.value = it.profile;
+      save(); retrain(false);
+      return;
+    }
     const inp = e.target.closest('input[data-m]');
     if (!inp) return;
     const it = lib.items.find((x) => x.id === inp.closest('.reel').dataset.id);
@@ -261,7 +293,7 @@
     inp.value = fmtNum(n);
     // só este cartão muda: redesenhar a lista tiraria o foco do campo seguinte
     const card = inp.closest('.reel');
-    card.querySelector('input[data-m=views]').parentElement.classList.toggle('need', !(it.metrics.views > 0));
+    card.querySelectorAll('input[data-m]').forEach((x) => x.parentElement.classList.toggle('need', needs(it, x.dataset.m)));
     card.querySelector('.rstate').innerHTML = footOf(it);
     save(); retrain(false);
   });
@@ -272,7 +304,15 @@
     save(); retrain();
   });
   $('#lTarget').addEventListener('change', (e) => { lib.target = e.target.value; save(); retrain(); });
-  $('#lFiles').addEventListener('change', (e) => { addFiles(Array.from(e.target.files)); e.target.value = ''; });
+  $('#lFiles').addEventListener('change', (e) => { addFiles(Array.from(e.target.files), 'reel'); e.target.value = ''; });
+  $('#lRefs').addEventListener('change', (e) => { addFiles(Array.from(e.target.files), 'ref'); e.target.value = ''; });
+  $('#lFilter').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    filter = b.dataset.v;
+    $('#lFilter').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    renderList();
+  });
   $('#lExport').addEventListener('click', () => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(lib)], { type: 'application/json' }));
@@ -288,7 +328,7 @@
       if (!d || !Array.isArray(d.items)) throw new Error('formato');
       const ids = new Set(lib.items.map((it) => it.id));
       const valid = d.items.filter((it) => it && it.id && it.feats && typeof it.feats.dur === 'number' && !ids.has(it.id))
-        .map((it) => ({ id: String(it.id), key: String(it.key || ''), name: String(it.name || 'Vídeo'), title: it.title ? String(it.title) : '', source: it.source === 'export' ? 'export' : 'reel',
+        .map((it) => ({ id: String(it.id), key: String(it.key || ''), name: String(it.name || 'Vídeo'), title: it.title ? String(it.title) : '', source: ['export', 'ref'].includes(it.source) ? it.source : 'reel', profile: it.profile ? String(it.profile).slice(0, 40) : '',
           thumb: typeof it.thumb === 'string' && it.thumb.startsWith('data:image/') ? it.thumb : null, feats: it.feats, metrics: it.metrics || {}, added: String(it.added || today()) }));
       lib.items = valid.concat(lib.items);
       save(); retrain();
@@ -319,7 +359,7 @@
     if ($('#learn').hidden) return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    addFiles(Array.from((e.dataTransfer && e.dataTransfer.files) || []).filter((f) => /^video\//.test(f.type) || /\.(mp4|mov|m4v|webm)$/i.test(f.name)));
+    addFiles(Array.from((e.dataTransfer && e.dataTransfer.files) || []).filter((f) => /^video\//.test(f.type) || /\.(mp4|mov|m4v|webm)$/i.test(f.name)), filter === 'ref' ? 'ref' : 'reel');
   }, true);
 
   retrain();

@@ -47,8 +47,8 @@
   <section id="learn" class="learn" hidden>
     <div class="learn-head">
       <button id="learnBack" class="btn ghost small">← Voltar</button>
-      <h1>🧠 Aprender com os seus Reels</h1>
-      <p>Adicione vídeos que você já postou e conte como foram. O site analisa cada um com o mesmo motor dos cortes, descobre o que dá certo no seu público e passa a escolher cortes parecidos com os seus melhores.</p>
+      <h1>🧠 Aprender com Reels e cortes virais</h1>
+      <p>Adicione vídeos que você já postou e cortes virais de outros perfis que você admira, com os números de cada um. O site analisa tudo com o mesmo motor dos cortes, descobre o que faz um vídeo viralizar e passa a escolher cortes parecidos com os melhores.</p>
     </div>
 
     <div class="learn-grid">
@@ -61,17 +61,20 @@
           </select>
         </label>
         <div class="inline wrap">
-          <label class="btn primary" for="lFiles">＋ Adicionar Reels</label>
+          <label class="btn primary" for="lFiles">＋ Meus Reels</label>
+          <label class="btn primary" for="lRefs">＋ Referências</label>
           <button id="lExport" class="btn ghost small">Fazer backup</button>
           <label class="btn ghost small" for="lImport">Restaurar</label>
         </div>
         <input type="file" id="lFiles" accept="video/*,.mov,.m4v" multiple hidden>
+        <input type="file" id="lRefs" accept="video/*,.mov,.m4v" multiple hidden>
         <input type="file" id="lImport" accept=".json,application/json" hidden>
         <p id="lQueue" class="hint queue"></p>
-        <p class="hint">O aprendizado fica guardado neste navegador. Faça backup para levar para outro aparelho.</p>
+        <p class="hint"><b>Referências</b> são cortes virais de outros perfis: salve o vídeo no celular e anote as visualizações e os seguidores do perfil (aparecem no próprio Instagram). Assim um vídeo com 500 mil visualizações num perfil pequeno vale mais que o mesmo número num perfil gigante.</p>
+        <p class="hint">O aprendizado fica guardado neste navegador. Faça backup para levar para outro aparelho. As referências servem só para o site aprender: não reposte vídeos de outras pessoas.</p>
       </div>
       <div class="card">
-        <h3>O que funciona no seu perfil</h3>
+        <h3>O que faz viralizar</h3>
         <div id="lInsights"></div>
       </div>
     </div>
@@ -84,10 +87,18 @@
         <li>Baixe os seus Reels: no Instagram, <b>Perfil → ☰ → Sua atividade → Baixar suas informações</b> (vêm os vídeos originais), ou salve cada um no celular.</li>
         <li>Veja os números em <b>Reel → Ver insights</b> (visualizações, curtidas, comentários, compartilhamentos e salvamentos).</li>
         <li>Adicione os vídeos aqui e preencha os números. Pode escrever “12 mil” ou “1,5 mi”.</li>
+        <li>Para referências de outros perfis: salve o corte viral no celular (ou grave a tela), e anote as visualizações do Reel e os seguidores do perfil.</li>
       </ol>
     </details>
 
-    <h2 class="lib-title">Seus vídeos <span id="lCount" class="muted"></span></h2>
+    <div class="lib-bar">
+      <h2 class="lib-title">Vídeos <span id="lCount" class="muted"></span></h2>
+      <div class="seg" id="lFilter">
+        <button data-v="all" class="on">Todos</button>
+        <button data-v="own">Meus</button>
+        <button data-v="ref">Referências</button>
+      </div>
+    </div>
     <div id="lList" class="lib"></div>
   </section>
 

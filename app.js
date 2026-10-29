@@ -360,8 +360,8 @@
     const st = window.CortesLearn ? window.CortesLearn.status() : null;
     $('#learnBadge').hidden = !st || !st.n;
     if (st) $('#learnBadge').textContent = S.model
-      ? `🧠 Usando o que aprendeu com ${st.n} vídeos seus (confiança ${st.conf}%).`
-      : st.n >= st.min ? '🧠 Ainda sem padrão claro nos seus vídeos: usando só a análise geral.' : `🧠 Aprendizado: ${st.n} de ${st.min} vídeos com visualizações.`;
+      ? `🧠 Usando o que aprendeu com ${st.n} vídeos (${st.own} seus · ${st.refs} referências), confiança ${st.conf}%.`
+      : st.n >= st.min ? '🧠 Ainda sem padrão claro nos vídeos: usando só a análise geral.' : `🧠 Aprendizado: ${st.n} de ${st.min} vídeos com números preenchidos.`;
     renderClips();
     if (S.clips.length) select(S.clips[0].id);
     makeThumbs(S.token);
