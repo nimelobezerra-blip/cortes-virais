@@ -12,6 +12,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="stylesheet" href="style.css">
 <script src="app.js" defer></script>
+<script src="learn.js" defer></script>
 </head>
 <body>
 <header class="top">
@@ -20,6 +21,7 @@
     <b>Cortes</b><span class="sub">virais e automáticos</span>
   </div>
   <div class="top-actions">
+    <button id="learnBtn" class="btn ghost">🧠 <span class="hide-sm">Aprender</span></button>
     <label class="btn ghost" for="file">Abrir vídeo</label>
     <button id="exportAll" class="btn primary" disabled>Exportar todos</button>
   </div>
@@ -40,6 +42,53 @@
       <li><b>2 · Detecção automática</b><span>Picos de energia na voz, reações, ritmo de fala e mudanças de cena viram uma nota de potencial viral.</span></li>
       <li><b>3 · Ajuste e exporte</b><span>Enquadramento automático 9:16, gancho na tela, legendas estilo karaokê e exportação de todos de uma vez.</span></li>
     </ol>
+  </section>
+
+  <section id="learn" class="learn" hidden>
+    <div class="learn-head">
+      <button id="learnBack" class="btn ghost small">← Voltar</button>
+      <h1>🧠 Aprender com os seus Reels</h1>
+      <p>Adicione vídeos que você já postou e conte como foram. O site analisa cada um com o mesmo motor dos cortes, descobre o que dá certo no seu público e passa a escolher cortes parecidos com os seus melhores.</p>
+    </div>
+
+    <div class="learn-grid">
+      <div class="card">
+        <div id="lStatus" class="lstatus"></div>
+        <label class="field"><span>Otimizar para</span>
+          <select id="lTarget">
+            <option value="views">Visualizações</option>
+            <option value="eng">Engajamento (interações por visualização)</option>
+          </select>
+        </label>
+        <div class="inline wrap">
+          <label class="btn primary" for="lFiles">＋ Adicionar Reels</label>
+          <button id="lExport" class="btn ghost small">Fazer backup</button>
+          <label class="btn ghost small" for="lImport">Restaurar</label>
+        </div>
+        <input type="file" id="lFiles" accept="video/*,.mov,.m4v" multiple hidden>
+        <input type="file" id="lImport" accept=".json,application/json" hidden>
+        <p id="lQueue" class="hint queue"></p>
+        <p class="hint">O aprendizado fica guardado neste navegador. Faça backup para levar para outro aparelho.</p>
+      </div>
+      <div class="card">
+        <h3>O que funciona no seu perfil</h3>
+        <div id="lInsights"></div>
+      </div>
+    </div>
+
+    <details class="card ig">
+      <summary>Por que o site não busca os vídeos direto do Instagram?</summary>
+      <p>O Instagram não deixa sites lerem vídeos e métricas livremente. O único caminho permitido é a API oficial da Meta, que exige uma conta profissional (criador ou empresa), um app cadastrado na Meta e um pequeno servidor. Pegar vídeos de outros perfis sem autorização viola as regras do Instagram e os direitos de quem os criou.</p>
+      <p>Enquanto isso, o caminho mais rápido é este:</p>
+      <ol>
+        <li>Baixe os seus Reels: no Instagram, <b>Perfil → ☰ → Sua atividade → Baixar suas informações</b> (vêm os vídeos originais), ou salve cada um no celular.</li>
+        <li>Veja os números em <b>Reel → Ver insights</b> (visualizações, curtidas, comentários, compartilhamentos e salvamentos).</li>
+        <li>Adicione os vídeos aqui e preencha os números. Pode escrever “12 mil” ou “1,5 mi”.</li>
+      </ol>
+    </details>
+
+    <h2 class="lib-title">Seus vídeos <span id="lCount" class="muted"></span></h2>
+    <div id="lList" class="lib"></div>
   </section>
 
   <section id="work" class="work" hidden>
@@ -102,6 +151,8 @@
           <button id="regen" class="btn primary" disabled>⚡ Gerar cortes</button>
           <button id="addClip" class="btn ghost" disabled title="Novo corte a partir do ponto atual">＋ Manual</button>
         </div>
+
+        <p id="learnBadge" class="learn-badge" hidden></p>
 
         <div id="clipEdit" class="card" hidden>
           <div class="ce-head"><b id="ceName">Corte</b><span id="ceDur" class="muted"></span></div>
@@ -223,6 +274,7 @@
     <div class="bar"><i id="xBar"></i></div>
     <p class="hint">Deixe esta aba aberta e visível: cada corte é gravado em tempo real.</p>
     <div id="xList" class="xlist"></div>
+    <p class="hint">🧠 Os cortes exportados entram em <b>Aprender</b>. Depois de postar, anote lá as visualizações para o site aprender com o resultado.</p>
     <div class="inline end">
       <button id="xCancel" class="btn ghost">Cancelar</button>
       <button id="xClose" class="btn primary" hidden>Fechar</button>

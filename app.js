@@ -79,7 +79,7 @@
     if (!/^video\//.test(file.type) && !/\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(file.name)) { toast('Escolha um arquivo de vídeo.'); return; }
     S.token++;
     if (S.url) URL.revokeObjectURL(S.url);
-    Object.assign(S, { file, url: URL.createObjectURL(file), db: null, voiced: null, sc: null, dist: null, clips: [], sel: null, cues: [], skipVisual: false });
+    Object.assign(S, { file, url: URL.createObjectURL(file), db: null, voiced: null, series: null, sc: null, dist: null, model: null, norm: null, clips: [], sel: null, cues: [], skipVisual: false });
     video.src = S.url; xv.src = S.url;
     try {
       await Promise.race([once(video, 'loadedmetadata'), once(video, 'error').then(() => { throw new Error('formato'); })]);
@@ -89,7 +89,7 @@
     }
     if (!isFinite(video.duration)) { video.currentTime = 1e9; await once(video, 'durationchange'); video.currentTime = 0; }
     S.duration = video.duration;
-    $('#intro').hidden = true; $('#work').hidden = false;
+    $('#intro').hidden = true; $('#learn').hidden = true; $('#work').hidden = false;
     $('#fileName').textContent = file.name;
     video.playbackRate = opts.speed;
     sizeView(); renderClips(); renderEditor(); updateSubsInfo();
@@ -97,45 +97,23 @@
     analyze();
   }
 
-  // ---------- análise ----------
-  function busy(text, p) {
-    $('#busy').hidden = text == null;
-    if (text != null) { $('#busyText').textContent = text; $('#busyBar').style.width = Math.round(p * 100) + '%'; }
+  // ---------- motor de análise (também usado pelo aprendizado, em learn.js) ----------
+  const HOP = 0.05;
+
+  async function decodeAudio(file) {
+    if (file.size > 1.5e9) throw new Error('grande');
+    const buf = await file.arrayBuffer();
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ac = new AC();
+    try { return await new Promise((res, rej) => ac.decodeAudioData(buf, res, rej)); } finally { if (ac.close) ac.close(); }
   }
 
-  async function analyze() {
-    const token = S.token;
-    $('#regen').disabled = $('#addClip').disabled = $('#exportAll').disabled = true;
-    busy('Ouvindo o áudio…', 0.03);
-    try {
-      if (S.file.size > 1.5e9) throw new Error('grande');
-      const buf = await S.file.arrayBuffer();
-      const AC = window.AudioContext || window.webkitAudioContext;
-      const ac = new AC();
-      const audio = await new Promise((res, rej) => ac.decodeAudioData(buf, res, rej));
-      ac.close && ac.close();
-      if (token !== S.token) return;
-      loudness(audio);
-    } catch (e) {
-      if (token !== S.token) return;
-      toast('Não deu para ler o áudio deste arquivo; a análise vai usar só a imagem.', 6000);
-    }
-    busy('Procurando ação e mudanças de cena…', 0.25);
-    $('#skipVisual').hidden = false;
-    const vis = await visual(token, (p) => busy('Procurando ação e mudanças de cena…', 0.25 + 0.7 * p));
-    $('#skipVisual').hidden = true;
-    if (token !== S.token) return;
-    scoreSeconds(vis);
-    busy(null);
-    $('#regen').disabled = $('#addClip').disabled = false;
-    regen();
-  }
-
-  function loudness(audio) {
-    const hop = S.hop, n = Math.max(1, Math.floor(audio.duration / hop)), sr = audio.sampleRate;
+  // volume em dB a cada 50 ms e quais janelas têm voz
+  function audioStats(audio) {
+    const n = Math.max(1, Math.floor(audio.duration / HOP)), sr = audio.sampleRate;
     const chans = [];
     for (let c = 0; c < Math.min(2, audio.numberOfChannels); c++) chans.push(audio.getChannelData(c));
-    const per = Math.floor(sr * hop), stride = 4;
+    const per = Math.floor(sr * HOP), stride = 4;
     const db = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       let sum = 0, cnt = 0;
@@ -145,27 +123,24 @@
     }
     const floor = quantile(db, 0.15), top = quantile(db, 0.9);
     const thr = floor + Math.max(4, 0.3 * (top - floor));
-    S.db = db;
-    S.dbLo = quantile(db, 0.3);
-    S.dbHi = Math.max(S.dbLo + 1, quantile(db, 0.99));
-    S.voiced = Uint8Array.from(db, (x) => (x > thr ? 1 : 0));
+    const dbLo = quantile(db, 0.3);
+    return { db, dbLo, dbHi: Math.max(dbLo + 1, quantile(db, 0.99)), voiced: Uint8Array.from(db, (x) => (x > thr ? 1 : 0)) };
   }
 
-  async function visual(token, onp) {
-    S.skipVisual = false;
+  // diferença entre quadros ao longo do vídeo; stop() interrompe e fica com o que já foi visto
+  async function visualScan(url, duration, onp, stop) {
     const v = document.createElement('video');
-    v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = S.url;
+    v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
     try { await once(v, 'loadedmetadata'); } catch (e) { return null; }
-    const N = clamp(Math.floor(S.duration / 0.5), 20, 600);
-    const step = S.duration / N, W = 48, H = 27;
+    const N = clamp(Math.floor(duration / 0.5), 20, 600);
+    const step = duration / N, W = 48, H = 27;
     const c = document.createElement('canvas'); c.width = W; c.height = H;
     const ctx = c.getContext('2d', { willReadFrequently: true });
     const motion = new Float32Array(N);
     let prev = null, done = 0;
     for (let i = 0; i < N; i++) {
-      if (token !== S.token) return null;
-      if (S.skipVisual) break;
-      await seek(v, Math.min(S.duration - 0.05, (i + 0.5) * step));
+      if (stop()) break;
+      await seek(v, Math.min(duration - 0.05, (i + 0.5) * step));
       ctx.drawImage(v, 0, 0, W, H);
       const d = ctx.getImageData(0, 0, W, H).data;
       const cur = new Uint8Array(W * H);
@@ -187,16 +162,22 @@
     return { step, motion };
   }
 
-  // nota por segundo: energia da voz, reações (subidas bruscas), movimento e cortes de cena
-  function scoreSeconds(vis) {
-    const T = Math.max(1, Math.floor(S.duration));
-    const loud = new Float32Array(T), vf = new Float32Array(T), onset = new Float32Array(T);
-    const motion = new Float32Array(T), cuts = new Float32Array(T);
-    const hasA = !!S.db, hasV = !!vis;
+  // séries por segundo, com somas acumuladas para medir qualquer trecho depressa
+  function buildSeries(duration, aud, vis) {
+    const T = Math.max(1, Math.floor(duration));
+    const loud = new Float32Array(T), vf = new Float32Array(T), onset = new Float32Array(T), peaks = new Float32Array(T);
+    const motion = new Float32Array(T), cuts = new Float32Array(T), bursts = new Float32Array(T), nextV = new Float32Array(T);
+    const hasA = !!aud, hasV = !!vis;
     if (hasA) {
-      const per = Math.round(1 / S.hop);
-      for (let t = 0; t < T; t++) { loud[t] = mean(S.db, t * per, (t + 1) * per) || S.dbLo; vf[t] = mean(S.voiced, t * per, (t + 1) * per); }
-      for (let t = 1; t < T; t++) onset[t] = loud[t] - mean(loud, t - 3, t);
+      const per = Math.round(1 / HOP), { db, voiced } = aud;
+      for (let t = 0; t < T; t++) { loud[t] = mean(db, t * per, (t + 1) * per) || aud.dbLo; vf[t] = mean(voiced, t * per, (t + 1) * per); }
+      for (let t = 1; t < T; t++) { onset[t] = loud[t] - mean(loud, t - 3, t); peaks[t] = onset[t] > 6 ? 1 : 0; }
+      for (let i = 1; i < voiced.length; i++) if (voiced[i] && !voiced[i - 1]) bursts[Math.min(T - 1, Math.floor(i * HOP))]++;
+      // segundos até a próxima fala, a partir do início de cada segundo
+      let next = Infinity;
+      const nv = new Float32Array(voiced.length);
+      for (let i = voiced.length - 1; i >= 0; i--) { if (voiced[i]) next = i; nv[i] = next === Infinity ? 10 : Math.min(10, (next - i) * HOP); }
+      for (let t = 0; t < T; t++) nextV[t] = nv[Math.min(nv.length - 1, t * per)];
     }
     if (hasV) {
       const { step, motion: mv } = vis, N = mv.length;
@@ -204,6 +185,71 @@
       for (let t = 0; t < T; t++) motion[t] = mv[clamp(Math.floor((t + 0.5) / step), 0, N - 1)];
       for (let i = 0; i < N; i++) if (mv[i] > cutThr) cuts[clamp(Math.floor((i + 0.5) * step), 0, T - 1)]++;
     }
+    const pre = (arr) => { const p = new Float64Array(arr.length + 1); for (let i = 0; i < arr.length; i++) p[i + 1] = p[i] + arr[i]; return p; };
+    return {
+      T, hasA, hasV, loud, vf, onset, motion, cuts, nextV,
+      P: { loud: pre(loud), loud2: pre(loud.map((x) => x * x)), vf: pre(vf), motion: pre(motion), cuts: pre(cuts), peaks: pre(peaks), bursts: pre(bursts) },
+    };
+  }
+
+  // características de um trecho, na mesma escala para qualquer vídeo
+  const FEATS = ['dur', 'hook', 'vf', 'dyn', 'peaks', 'motion', 'hookMotion', 'cuts', 'quietStart', 'bursts'];
+  function features(sr, s, e) {
+    const a = clamp(Math.floor(s), 0, sr.T - 1), b = clamp(Math.ceil(e), a + 1, sr.T), n = b - a, h = Math.min(b, a + 3);
+    const sum = (k, i, j) => sr.P[k][j] - sr.P[k][i];
+    const ml = sum('loud', a, b) / n, mm = sum('motion', a, b) / n, min = Math.max(n, 10) / 60;
+    return {
+      dur: e - s,
+      hook: sr.hasA ? sum('loud', a, h) / (h - a) - ml : 0,
+      vf: sr.hasA ? sum('vf', a, b) / n : 0,
+      dyn: sr.hasA ? Math.sqrt(Math.max(0, sum('loud2', a, b) / n - ml * ml)) : 0,
+      peaks: sr.hasA ? sum('peaks', a, b) / min : 0,
+      motion: sr.hasV ? mm : 0,
+      hookMotion: sr.hasV ? sum('motion', a, h) / (h - a) - mm : 0,
+      cuts: sr.hasV ? sum('cuts', a, b) / min : 0,
+      quietStart: sr.hasA ? sr.nextV[a] : 0,
+      bursts: sr.hasA ? sum('bursts', a, b) / min : 0,
+    };
+  }
+  const clipFeats = (s, e) => { const f = features(S.series, s, e); f.dur /= opts.speed; return f; };
+
+  window.Cortes = { decodeAudio, audioStats, visualScan, buildSeries, features, FEATS, seek, once, toast };
+
+  // ---------- análise do vídeo aberto ----------
+  function busy(text, p) {
+    $('#busy').hidden = text == null;
+    if (text != null) { $('#busyText').textContent = text; $('#busyBar').style.width = Math.round(p * 100) + '%'; }
+  }
+
+  async function analyze() {
+    const token = S.token;
+    $('#regen').disabled = $('#addClip').disabled = $('#exportAll').disabled = true;
+    busy('Ouvindo o áudio…', 0.03);
+    let aud = null;
+    try {
+      aud = audioStats(await decodeAudio(S.file));
+    } catch (e) {
+      if (token !== S.token) return;
+      toast('Não deu para ler o áudio deste arquivo; a análise vai usar só a imagem.', 6000);
+    }
+    if (token !== S.token) return;
+    if (aud) Object.assign(S, { db: aud.db, dbLo: aud.dbLo, dbHi: aud.dbHi, voiced: aud.voiced });
+    busy('Procurando ação e mudanças de cena…', 0.25);
+    S.skipVisual = false;
+    $('#skipVisual').hidden = false;
+    const vis = await visualScan(S.url, S.duration, (p) => busy('Procurando ação e mudanças de cena…', 0.25 + 0.7 * p), () => token !== S.token || S.skipVisual);
+    $('#skipVisual').hidden = true;
+    if (token !== S.token) return;
+    S.series = buildSeries(S.duration, aud, vis);
+    scoreSeconds();
+    busy(null);
+    $('#regen').disabled = $('#addClip').disabled = false;
+    regen();
+  }
+
+  // nota por segundo: energia da voz, reações (subidas bruscas), movimento e cortes de cena
+  function scoreSeconds() {
+    const { T, loud, onset, motion, cuts, vf, hasA, hasV } = S.series;
     const zL = zscore(loud), zO = zscore(onset), zM = zscore(motion);
     const wA = hasA ? (hasV ? 0.7 : 1) : 0, wV = hasV ? (hasA ? 0.3 : 1) : 0;
     const score = new Float32Array(T);
@@ -213,13 +259,22 @@
     S.sc = { T, score, zL, zO, zM, cuts, vf, hasA, hasV };
   }
 
-  function rangeRaw(s, e) {
+  function heurRaw(s, e) {
     const sc = S.sc;
     if (!sc) return 0;
     const a = clamp(Math.floor(s), 0, sc.T - 1), b = clamp(Math.ceil(e), a + 1, sc.T);
     let r = mean(sc.score, a, b) + 0.5 * mean(sc.score, a, Math.min(b, a + 3)); // gancho: os 3 primeiros segundos contam a dobrar
     if (sc.hasA) r += 0.4 * (mean(sc.vf, a, b) - 0.5);                          // pouco silêncio
     return r;
+  }
+  // com aprendizado: mistura a nota geral com a previsão feita a partir dos Reels do perfil
+  function modelZ(s, e) {
+    return S.model && S.norm ? (S.model.predict(clipFeats(s, e)) - S.norm.pm) / S.norm.ps : 0;
+  }
+  function rangeRaw(s, e) {
+    const h = heurRaw(s, e);
+    if (!S.model || !S.norm) return h;
+    return (1 - S.model.weight) * (h - S.norm.hm) / S.norm.hs + S.model.weight * modelZ(s, e);
   }
   function toPct(raw) {
     const d = S.dist;
@@ -236,6 +291,7 @@
     for (let t = a; t < b; t++) maxO = Math.max(maxO, sc.zO[t]);
     let cuts = 0;
     for (let t = a; t < b; t++) cuts += sc.cuts[t];
+    if (modelZ(s, e) > 0.8) out.push('🧠 Parecido com seus melhores');
     if (sc.hasA && mean(sc.zL, a, b) > 0.4) out.push('🔊 Energia alta');
     if (sc.hasA && maxO > 1.6) out.push('⚡ Pico de reação');
     if (mean(sc.score, a, Math.min(b, a + 3)) > mean(sc.score, a, b) + 0.15) out.push('🎣 Começo forte');
@@ -264,9 +320,19 @@
   function pickClips(L, N) {
     const T = S.sc ? S.sc.T : Math.floor(S.duration);
     if (S.duration <= L * 1.15 || !S.sc) {
+      S.model = S.norm = null;
       S.dist = [rangeRaw(0, S.duration)];
       const c = makeClip(0, S.duration);
       return [c];
+    }
+    S.model = window.CortesLearn ? window.CortesLearn.model() : null;
+    S.norm = null;
+    if (S.model) {
+      const hs = [], ps = [];
+      for (let a = 0; a + L <= T; a++) { hs.push(heurRaw(a, a + L)); ps.push(S.model.predict(clipFeats(a, a + L))); }
+      const ms = (arr) => { const m = mean(arr); return [m, Math.sqrt(mean(arr.map((x) => (x - m) ** 2))) || 1]; };
+      const [hm, hsd] = ms(hs), [pm, psd] = ms(ps);
+      S.norm = { hm, hs: hsd, pm, ps: psd };
     }
     const cands = [];
     for (let a = 0; a + L <= T; a++) cands.push({ a, r: rangeRaw(a, a + L) });
@@ -283,7 +349,7 @@
       s = clamp(s == null ? c.a : s, 0, S.duration);
       e = clamp(e == null ? c.a + L : e, s + 3, S.duration);
       return makeClip(s, e);
-    });
+    }).sort((x, y) => y.score - x.score);
   }
 
   function regen() {
@@ -291,6 +357,11 @@
     const L = +$('#genLen').value, N = +$('#genCount').value;
     S.clips = pickClips(L, N);
     $('#exportAll').disabled = !S.clips.length;
+    const st = window.CortesLearn ? window.CortesLearn.status() : null;
+    $('#learnBadge').hidden = !st || !st.n;
+    if (st) $('#learnBadge').textContent = S.model
+      ? `🧠 Usando o que aprendeu com ${st.n} vídeos seus (confiança ${st.conf}%).`
+      : st.n >= st.min ? '🧠 Ainda sem padrão claro nos seus vídeos: usando só a análise geral.' : `🧠 Aprendizado: ${st.n} de ${st.min} vídeos com visualizações.`;
     renderClips();
     if (S.clips.length) select(S.clips[0].id);
     makeThumbs(S.token);
@@ -933,6 +1004,7 @@
         if (X.cancel) break;
         const name = `corte-${String(idx).padStart(2, '0')}.${ext}`;
         const href = download(blob, name);
+        if (window.CortesLearn && S.series) window.CortesLearn.addExport({ name: (S.file ? S.file.name.replace(/\.[^.]+$/, '') + ' · ' : '') + name, title: c.title, thumb: c.thumb, feats: clipFeats(c.start, c.end) });
         $('#xList').insertAdjacentHTML('beforeend', `<a href="${href}" download="${name}"><span>${name}</span><b>${(blob.size / 1048576).toFixed(1)} MB ⬇</b></a>`);
       } catch (e) {
         console.error(e);
