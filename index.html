@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d0d12">
+<title>Cortes Virais</title>
+<meta name="description" content="Transforme vídeos longos em cortes virais verticais, automaticamente e direto no navegador.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">✂</span>
+    <b>Cortes</b><span class="sub">virais e automáticos</span>
+  </div>
+  <div class="top-actions">
+    <label class="btn ghost" for="file">Abrir vídeo</label>
+    <button id="exportAll" class="btn primary" disabled>Exportar todos</button>
+  </div>
+  <input type="file" id="file" accept="video/*,.mkv,.mov,.m4v" hidden>
+</header>
+
+<main>
+  <section id="intro" class="intro">
+    <div id="drop" class="drop">
+      <div class="drop-icon" aria-hidden="true">🎬</div>
+      <h1>Transforme vídeos longos em <span class="grad">cortes virais</span></h1>
+      <p>Arraste um vídeo para cá. O site encontra os momentos mais fortes, corta no formato vertical e adiciona título, legendas, zoom e barra de progresso automaticamente.</p>
+      <label class="btn primary big" for="file">Escolher vídeo</label>
+      <p class="fine">Seu vídeo não sai do computador: tudo é processado no navegador.</p>
+    </div>
+    <ol class="steps">
+      <li><b>1 · Carregue</b><span>Podcast, live, aula, entrevista ou gameplay em MP4, MOV ou WebM.</span></li>
+      <li><b>2 · Detecção automática</b><span>Picos de energia na voz, reações, ritmo de fala e mudanças de cena viram uma nota de potencial viral.</span></li>
+      <li><b>3 · Ajuste e exporte</b><span>Enquadramento automático 9:16, gancho na tela, legendas estilo karaokê e exportação de todos de uma vez.</span></li>
+    </ol>
+  </section>
+
+  <section id="work" class="work" hidden>
+    <div class="stage">
+      <div class="preview-wrap" id="previewWrap">
+        <canvas id="view" width="540" height="960"></canvas>
+        <div id="busy" class="busy" hidden>
+          <div class="spinner"></div>
+          <p id="busyText">Analisando…</p>
+          <div class="bar"><i id="busyBar"></i></div>
+          <button id="skipVisual" class="btn ghost small" hidden>Pular análise de imagem</button>
+        </div>
+      </div>
+      <div class="transport">
+        <button id="prevClip" class="icon" title="Corte anterior">⏮</button>
+        <button id="play" class="icon play" title="Reproduzir (espaço)">▶</button>
+        <button id="nextClip" class="icon" title="Próximo corte">⏭</button>
+        <span id="time" class="time">0:00.0 / 0:00.0</span>
+        <label class="check"><input type="checkbox" id="loop" checked> Repetir corte</label>
+        <span class="grow"></span>
+        <span id="fileName" class="file-name"></span>
+      </div>
+    </div>
+
+    <div class="timeline-wrap">
+      <canvas id="timeline"></canvas>
+      <div class="tl-legend">
+        <span><i class="sw wave"></i>Volume</span>
+        <span><i class="sw heat"></i>Potencial viral</span>
+        <span><i class="sw clip"></i>Cortes (arraste as bordas do corte selecionado)</span>
+      </div>
+    </div>
+
+    <aside class="panel">
+      <nav class="tabs" role="tablist">
+        <button data-tab="clips" class="on" role="tab">Cortes</button>
+        <button data-tab="style" role="tab">Estilo</button>
+        <button data-tab="subs" role="tab">Legendas</button>
+      </nav>
+
+      <div class="tab" id="tab-clips">
+        <div class="gen">
+          <label class="field small"><span>Duração</span>
+            <select id="genLen">
+              <option value="15">15 s</option>
+              <option value="30" selected>30 s</option>
+              <option value="45">45 s</option>
+              <option value="60">60 s</option>
+              <option value="90">90 s</option>
+            </select>
+          </label>
+          <label class="field small"><span>Quantidade</span>
+            <select id="genCount">
+              <option>3</option>
+              <option selected>5</option>
+              <option>8</option>
+              <option>12</option>
+            </select>
+          </label>
+          <button id="regen" class="btn primary" disabled>⚡ Gerar cortes</button>
+          <button id="addClip" class="btn ghost" disabled title="Novo corte a partir do ponto atual">＋ Manual</button>
+        </div>
+
+        <div id="clipEdit" class="card" hidden>
+          <div class="ce-head"><b id="ceName">Corte</b><span id="ceDur" class="muted"></span></div>
+          <label class="field"><span>Título na tela (gancho)</span>
+            <span class="inline"><input id="ceTitle" maxlength="90"><button id="ceShuffle" class="btn ghost small" title="Outra sugestão">🎲</button></span>
+          </label>
+          <div class="nudge">
+            <span>Início</span>
+            <button data-edge="start" data-d="-0.5">−½s</button>
+            <output id="ceStart">0:00.0</output>
+            <button data-edge="start" data-d="0.5">+½s</button>
+            <button data-edge="start" data-d="here" title="Usar o ponto atual">Aqui</button>
+          </div>
+          <div class="nudge">
+            <span>Fim</span>
+            <button data-edge="end" data-d="-0.5">−½s</button>
+            <output id="ceEnd">0:00.0</output>
+            <button data-edge="end" data-d="0.5">+½s</button>
+            <button data-edge="end" data-d="here" title="Usar o ponto atual">Aqui</button>
+          </div>
+          <button id="ceExport" class="btn primary wide">⬇ Exportar este corte</button>
+        </div>
+
+        <div id="clipList" class="clip-list"></div>
+      </div>
+
+      <div class="tab" id="tab-style" hidden>
+        <div class="group">
+          <h3>Formato</h3>
+          <div class="seg" data-opt="ratio">
+            <button data-v="9:16">9:16 <small>Reels · TikTok · Shorts</small></button>
+            <button data-v="1:1">1:1</button>
+            <button data-v="4:5">4:5</button>
+            <button data-v="16:9">16:9</button>
+          </div>
+          <div class="seg" data-opt="fit">
+            <button data-v="crop">Preencher (cortar)</button>
+            <button data-v="blur">Inteiro com fundo desfocado</button>
+          </div>
+        </div>
+        <div class="group" data-show="fit:crop">
+          <h3>Enquadramento</h3>
+          <div class="seg" data-opt="reframe">
+            <button data-v="auto">Automático</button>
+            <button data-v="center">Centro</button>
+            <button data-v="manual">Manual</button>
+          </div>
+          <p class="hint" data-show="reframe:auto">Segue o movimento da imagem (quem está falando ou se mexendo).</p>
+          <label class="field" data-show="reframe:manual"><span>Posição horizontal</span><input type="range" data-opt="offset" data-num min="0" max="1" step="0.01"></label>
+        </div>
+        <div class="group">
+          <h3>Efeitos</h3>
+          <label class="check"><input type="checkbox" data-opt="zoom"> Zoom automático nos picos de voz</label>
+          <label class="check"><input type="checkbox" data-opt="progress"> Barra de progresso</label>
+          <label class="field"><span>Título (gancho)</span>
+            <select data-opt="hook">
+              <option value="intro">Nos primeiros 4 segundos</option>
+              <option value="always">Durante o corte todo</option>
+              <option value="off">Não mostrar</option>
+            </select>
+          </label>
+          <label class="field"><span>Velocidade</span>
+            <select data-opt="speed" data-num>
+              <option value="1">1×</option>
+              <option value="1.1">1,1×</option>
+              <option value="1.25">1,25×</option>
+              <option value="1.5">1,5×</option>
+            </select>
+          </label>
+          <label class="field"><span>Seu @ (marca d'água)</span><input data-opt="handle" placeholder="@seuperfil" maxlength="40"></label>
+        </div>
+        <div class="group">
+          <h3>Legendas</h3>
+          <div class="seg" data-opt="capStyle">
+            <button data-v="karaoke">Karaokê</button>
+            <button data-v="simple">Simples</button>
+            <button data-v="none">Sem legenda</button>
+          </div>
+          <div class="inline">
+            <label class="field"><span>Cor de destaque</span><input type="color" data-opt="capColor"></label>
+            <label class="field grow"><span>Altura na tela</span><input type="range" data-opt="capPos" data-num min="0.45" max="0.9" step="0.01"></label>
+          </div>
+        </div>
+        <div class="group">
+          <h3>Exportação</h3>
+          <div class="seg" data-opt="quality" data-num>
+            <button data-v="720">720p (mais rápido)</button>
+            <button data-v="1080">1080p</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab" id="tab-subs" hidden>
+        <p class="hint">O navegador não consegue transcrever sozinho o áudio de um arquivo. Cole o que é dito no corte selecionado e o site distribui as palavras pelos trechos com voz, em blocos curtos no estilo dos vídeos virais.</p>
+        <label class="field"><span id="trLabel">Texto falado no corte selecionado</span>
+          <textarea id="transcript" rows="7" placeholder="Cole aqui a fala deste corte…"></textarea>
+        </label>
+        <div class="inline">
+          <button id="applyTr" class="btn primary">Sincronizar legendas</button>
+          <button id="clearTr" class="btn ghost">Limpar deste corte</button>
+        </div>
+        <hr>
+        <p class="hint">Já tem a transcrição do vídeo inteiro (YouTube, Whisper, CapCut…)? Importe o arquivo e cada corte pega as suas falas.</p>
+        <div class="inline">
+          <label class="btn ghost" for="srtFile">Importar .srt / .vtt</label>
+          <button id="exportSrt" class="btn ghost">Baixar .srt do corte</button>
+        </div>
+        <input type="file" id="srtFile" accept=".srt,.vtt,text/vtt" hidden>
+        <p id="subsInfo" class="hint"></p>
+      </div>
+    </aside>
+  </section>
+</main>
+
+<div id="xModal" class="modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="xTitle">
+    <h2 id="xTitle">Exportando</h2>
+    <p id="xText"></p>
+    <div class="bar"><i id="xBar"></i></div>
+    <p class="hint">Deixe esta aba aberta e visível: cada corte é gravado em tempo real.</p>
+    <div id="xList" class="xlist"></div>
+    <div class="inline end">
+      <button id="xCancel" class="btn ghost">Cancelar</button>
+      <button id="xClose" class="btn primary" hidden>Fechar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<video id="src" class="offscreen" playsinline preload="auto"></video>
+<video id="xv" class="offscreen" playsinline preload="auto"></video>
+</body>
+</html>
